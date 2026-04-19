@@ -32,19 +32,23 @@ jobs:
           echo "pwd=$PWD_HASH" >> $GITHUB_OUTPUT
           echo "failed=false" >> $GITHUB_OUTPUT
           
-      - name: 追加到 Auth 文件
+      - name: 检查是否已存在
+        id: check
         if: steps.extract.outputs.failed == 'false'
         run: |
-          # 去重检查
           if grep -q "${{ steps.extract.outputs.user }}" Auth; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            exit 0
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
           fi
+          
+      - name: 追加到 Auth 文件
+        if: steps.extract.outputs.failed == 'false' && steps.check.outputs.exists == 'false'
+        run: |
           echo "{${{ steps.extract.outputs.user }},${{ steps.extract.outputs.pwd }}}" >> Auth
-          echo "exists=false" >> $GITHUB_OUTPUT
           
       - name: 提交更改
-        if: steps.extract.outputs.failed == 'false' && steps.extract.outputs.exists == 'false'
+        if: steps.extract.outputs.failed == 'false' && steps.check.outputs.exists == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -53,7 +57,7 @@ jobs:
           git push
           
       - name: 关闭 Issue（成功）
-        if: steps.extract.outputs.failed == 'false' && steps.extract.outputs.exists == 'false'
+        if: steps.extract.outputs.failed == 'false' && steps.check.outputs.exists == 'false'
         uses: peter-evans/close-issue@v3
         with:
           issue-number: ${{ github.event.issue.number }}
@@ -62,7 +66,7 @@ jobs:
             您的账号已激活，现在可以使用客户端登录了。
             
       - name: 关闭 Issue（已存在）
-        if: steps.extract.outputs.exists == 'true'
+        if: steps.check.outputs.exists == 'true'
         uses: peter-evans/close-issue@v3
         with:
           issue-number: ${{ github.event.issue.number }}

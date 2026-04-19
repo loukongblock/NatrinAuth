@@ -20,11 +20,15 @@ jobs:
         env:
           BODY: ${{ github.event.issue.body }}
         run: |
-          USER_HASH=$(echo "$BODY" | grep -oP 'USER_HASH=\K[a-f0-9]{64}' | head -1)
-          PWD_HASH=$(echo "$BODY" | grep -oP 'PWD_HASH=\K[a-f0-9]{64}' | head -1)
+          # 使用更可靠的方式提取，避免正则问题
+          USER_HASH=$(echo "$BODY" | grep "USER_HASH=" | head -1 | cut -d'=' -f2 | tr -d '[:space:]')
+          PWD_HASH=$(echo "$BODY" | grep "PWD_HASH=" | head -1 | cut -d'=' -f2 | tr -d '[:space:]')
           
-          if [ -z "$USER_HASH" ] || [ -z "$PWD_HASH" ]; then
+          # 验证哈希格式（64位小写十六进制）
+          if [[ ! "$USER_HASH" =~ ^[a-f0-9]{64}$ ]] || [[ ! "$PWD_HASH" =~ ^[a-f0-9]{64}$ ]]; then
             echo "failed=true" >> $GITHUB_OUTPUT
+            echo "debug_user=${USER_HASH:0:20}..." >> $GITHUB_OUTPUT
+            echo "debug_pwd=${PWD_HASH:0:20}..." >> $GITHUB_OUTPUT
             exit 0
           fi
           
@@ -45,7 +49,10 @@ jobs:
       - name: 追加到 Auth 文件
         if: steps.extract.outputs.failed == 'false' && steps.check.outputs.exists == 'false'
         run: |
-          echo "{${{ steps.extract.outputs.user }},${{ steps.extract.outputs.pwd }}}" >> Auth
+          # 确保格式完全正确：{user_hash,pwd_hash} 无空格
+          USER="${{ steps.extract.outputs.user }}"
+          PWD="${{ steps.extract.outputs.pwd }}"
+          echo "{$USER,$PWD}" >> Auth
           
       - name: 提交更改
         if: steps.extract.outputs.failed == 'false' && steps.check.outputs.exists == 'false'
@@ -79,4 +86,6 @@ jobs:
         with:
           issue-number: ${{ github.event.issue.number }}
           comment: |
-            ❌ **注册失败**：无法解析注册数据，请通过客户端重新提交。
+            ❌ **注册失败**：无法解析注册数据。
+            调试信息：USER_HASH=${{ steps.extract.outputs.debug_user }}, PWD_HASH=${{ steps.extract.outputs.debug_pwd }}
+            请通过客户端重新提交。

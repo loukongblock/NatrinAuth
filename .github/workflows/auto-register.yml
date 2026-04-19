@@ -14,44 +14,85 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史，避免浅克隆问题
       
-      - name: 提取并写入（原样追加，不做任何处理）
-        id: process
+      - name: 提取数据
+        id: extract
         env:
           BODY: ${{ github.event.issue.body }}
         run: |
-          # 提取 DATA= 后面的内容（客户端已经格式化好的 {hash,hash}）
+          # 提取 DATA= 后面的内容
           DATA=$(echo "$BODY" | grep "^DATA=" | cut -d'=' -f2- | tr -d '\n\r')
+          echo "data=$DATA" >> $GITHUB_OUTPUT
+          echo "Extracted: $DATA"
+      
+      - name: 验证并写入（带重试机制）
+        id: process
+        run: |
+          DATA="${{ steps.extract.outputs.data }}"
           
-          # 验证格式：必须以 { 开头，} 结尾，中间有逗号
+          # 验证格式：{64位hex,64位hex}
           if [[ ! "$DATA" =~ ^\{[a-f0-9]{64},[a-f0-9]{64}\}$ ]]; then
             echo "failed=true" >> $GITHUB_OUTPUT
-            echo "debug_data=${DATA:0:50}..." >> $GITHUB_OUTPUT
+            echo "reason=格式错误" >> $GITHUB_OUTPUT
+            echo "debug=$DATA" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # 检查是否已存在（提取 user_hash 部分）
           USER_HASH=$(echo "$DATA" | cut -d',' -f1 | tr -d '{')
-          if grep -q "{$USER_HASH," Auth; then
+          
+          # 检查是否已存在（精确匹配）
+          if grep -qF "{$USER_HASH," Auth 2>/dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "data=$DATA" >> $GITHUB_OUTPUT
+            echo "user_hash=$USER_HASH" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # 原样追加到文件（不做任何修改）
-          echo "$DATA" >> Auth
-          echo "failed=false" >> $GITHUB_OUTPUT
-          echo "data=$DATA" >> $GITHUB_OUTPUT
+          # 追加写入（确保换行）
+          printf "%s\n" "$DATA" >> Auth
           
-      - name: 提交更改
-        if: steps.process.outputs.failed == 'false'
+          # 验证写入成功
+          if ! grep -qF "$DATA" Auth; then
+            echo "failed=true" >> $GITHUB_OUTPUT
+            echo "reason=写入验证失败" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "failed=false" >> $GITHUB_OUTPUT
+          echo "user_hash=$USER_HASH" >> $GITHUB_OUTPUT
+      
+      - name: 提交更改（带重试解决并发冲突）
+        if: steps.process.outputs.failed == 'false' && steps.process.outputs.exists != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Auth
-          git commit -m "auto: register ${{ steps.process.outputs.data }}"
-          git push
           
+          git add Auth
+          git commit -m "auto: register ${{ steps.extract.outputs.data }}"
+          
+          # 推送到 main，带重试机制解决并发冲突
+          for i in {1..3}; do
+            if git push origin HEAD:main; then
+              echo "Push successful"
+              exit 0
+            fi
+            
+            echo "Push failed, retrying... ($i/3)"
+            git fetch origin main
+            git rebase origin/main
+            
+            # 如果有冲突，保留我们的更改
+            if [ $? -ne 0 ]; then
+              git checkout --ours Auth
+              git add Auth
+              git rebase --continue
+            fi
+          done
+          
+          echo "Push failed after retries"
+          exit 1
+      
       - name: 关闭 Issue（成功）
         if: steps.process.outputs.failed == 'false' && steps.process.outputs.exists != 'true'
         uses: peter-evans/close-issue@v3
@@ -59,7 +100,7 @@ jobs:
           issue-number: ${{ github.event.issue.number }}
           comment: |
             ✅ **注册成功！**
-            您的账号已激活，现在可以使用客户端登录了。
+            账号 `${{ steps.process.outputs.user_hash }}` 已激活。
             
       - name: 关闭 Issue（已存在）
         if: steps.process.outputs.exists == 'true'
@@ -67,14 +108,13 @@ jobs:
         with:
           issue-number: ${{ github.event.issue.number }}
           comment: |
-            ⚠️ **该账号已注册**，请直接登录，无需重复注册。
+            ⚠️ **该账号已注册**（Hash: `${{ steps.process.outputs.user_hash }}`），请直接登录。
             
-      - name: 关闭 Issue（格式错误）
+      - name: 关闭 Issue（失败）
         if: steps.process.outputs.failed == 'true'
         uses: peter-evans/close-issue@v3
         with:
           issue-number: ${{ github.event.issue.number }}
           comment: |
-            ❌ **注册失败**：数据格式错误。
-            调试信息：${{ steps.process.outputs.debug_data }}
-            请更新客户端后重新提交。
+            ❌ **注册失败**：${{ steps.process.outputs.reason }}
+            调试信息：`${{ steps.process.outputs.debug }}`

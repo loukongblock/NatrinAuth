@@ -27,7 +27,7 @@ jobs:
           echo "data=$DATA" >> $GITHUB_OUTPUT
           echo "Extracted: $DATA"
       
-      - name: 验证并写入（带重试机制）
+       - name: 验证并写入（带重试机制）
         id: process
         run: |
           DATA="${{ steps.extract.outputs.data }}"
@@ -49,8 +49,18 @@ jobs:
             exit 0
           fi
           
-          # 追加写入（确保换行）
-          printf "%s\n" "$DATA" >> Auth
+          # 🔧 修复：确保文件末尾有换行符再追加，避免第一行前面有空行
+          # 如果文件存在且不为空，且末尾没有换行符，先补一个换行符
+          if [ -s Auth ]; then
+            # 检查文件末尾是否有换行符
+            if [ -n "$(tail -c 1 Auth | tr -d '\n')" ]; then
+              echo "" >> Auth
+            fi
+            echo "$DATA" >> Auth
+          else
+            # 文件不存在或为空，直接写入（不带前导换行）
+            echo "$DATA" > Auth
+          fi
           
           # 验证写入成功
           if ! grep -qF "$DATA" Auth; then

@@ -27,7 +27,7 @@ jobs:
           echo "data=$DATA" >> $GITHUB_OUTPUT
           echo "Extracted: $DATA"
       
-       - name: 验证并写入（带重试机制）
+      - name: 验证并写入（带重试机制）
         id: process
         run: |
           DATA="${{ steps.extract.outputs.data }}"
